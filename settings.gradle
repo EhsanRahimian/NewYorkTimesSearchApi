@@ -1,2 +1,2 @@
-rootProject.name = "New York Times Search API"
+rootProject.name = "NYT Master"
 include ':app'

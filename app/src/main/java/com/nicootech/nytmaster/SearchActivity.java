@@ -1,105 +1,98 @@
 package com.nicootech.nytmaster;
 
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SearchView;
-import androidx.appcompat.widget.Toolbar;
-import androidx.fragment.app.FragmentManager;
+import androidx.lifecycle.ViewModelProvider;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.recyclerview.widget.StaggeredGridLayoutManager;
-import butterknife.BindView;
-import butterknife.ButterKnife;
-import retrofit2.Call;
-import retrofit2.Callback;
-import retrofit2.Response;
 
-import android.annotation.SuppressLint;
-import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
-import android.view.Menu;
-import android.view.MenuItem;
 
-import com.nicootech.nytmaster.adapters.ArticlesAdapter;
-import com.nicootech.nytmaster.helper.Helper;
-import com.nicootech.nytmaster.listener.EndlessRecyclerViewScrollListener;
-import com.nicootech.nytmaster.models.Article;
-import com.nicootech.nytmaster.models.ArticlesResponse;
-import com.nicootech.nytmaster.network.NYTimesClient;
-import com.nicootech.nytmaster.network.NYTimesService;
-import com.nicootech.nytmaster.util.Constants;
+import com.nicootech.nytmaster.adapters.ArticleRecyclerAdapter;
+import com.nicootech.nytmaster.adapters.OnArticleListener;
+import com.nicootech.nytmaster.utils.Testing;
+import com.nicootech.nytmaster.utils.VerticalSpacingItemDecorator;
+import com.nicootech.nytmaster.viewmodels.ArticleListViewModel;
 
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.util.ArrayList;
-import java.util.List;
 
-import static com.nicootech.nytmaster.util.Constants.TOP_QUERY;
-
-public class SearchActivity extends AppCompatActivity {
+public class SearchActivity extends BaseActivity implements OnArticleListener {
 
     private static final String TAG = "SearchActivity";
-    public static final NYTimesService NEW_YORK_TIMES_SERVICE = NYTimesClient.getInstance()
-            .getNYTimesService();
 
-    @SuppressLint("NonConstantResourceId")
-    @BindView(R.id.rvArticles)
-    RecyclerView mrvArticles;
-
-    private List<Article> mArticles;
-    private ArticlesAdapter mArticlesAdapter;
-    private String mQueryText;
+    private ArticleListViewModel mArticleListViewModel;
+    private RecyclerView mRecyclerView;
+    private ArticleRecyclerAdapter mAdapter;
+    private SearchView mSearchView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_search);
-        Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-        setSupportActionBar(toolbar);
-        ButterKnife.bind(this);
+        mRecyclerView = findViewById(R.id.article_list);
+        mSearchView = findViewById(R.id.search_view);
 
-        mArticles = new ArrayList<>();
-        mArticlesAdapter = new ArticlesAdapter(this, mArticles);
-        StaggeredGridLayoutManager gridLayoutManager =
-                new StaggeredGridLayoutManager(1, StaggeredGridLayoutManager.VERTICAL);
-        mrvArticles.setAdapter(mArticlesAdapter);
-        mrvArticles.setLayoutManager(gridLayoutManager);
+        mArticleListViewModel = new ViewModelProvider(this).get(ArticleListViewModel.class);
 
-        mrvArticles.addOnScrollListener(new EndlessRecyclerViewScrollListener(gridLayoutManager) {
-            @Override
-            public void onLoadMore(int page, int totalItemsCount) {
-                fetchArticles(page);
-            }
-        });
-
-        mQueryText = TOP_QUERY;
-        fetchArticles(0);
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (!Helper.isNetworkAvailable(this)) {
-            Helper.showSnackBarForInternetConnection(mrvArticles, this);
+        initRecyclerView();
+        subscribeObservers();
+        initSearchView();
+        if(!mArticleListViewModel.isViewingArticles()){
+            //display search categories
+            displaySearchCategories();
         }
     }
 
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.menu_search, menu);
-        MenuItem searchItem = menu.findItem(R.id.action_search);
-        final SearchView searchView = (SearchView) searchItem.getActionView();
-        searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+
+    private void subscribeObservers(){
+        mArticleListViewModel.getDocs().observe(this, docs -> {
+            if(docs != null){
+                if(mArticleListViewModel.isViewingArticles()){
+                    Testing.print(docs,"articles test");
+                    mArticleListViewModel.setIsPerformingQuery(false);
+                    mAdapter.setDocs(docs);
+                }
+            }
+        });
+    }
+
+    private void initRecyclerView(){
+        mAdapter = new ArticleRecyclerAdapter(this);
+        VerticalSpacingItemDecorator itemDecorator = new VerticalSpacingItemDecorator(30);
+        mRecyclerView.addItemDecoration(itemDecorator);
+        mRecyclerView.setAdapter(mAdapter);
+        LinearLayoutManager layoutManager = new LinearLayoutManager(this);
+        mRecyclerView.setLayoutManager(layoutManager);
+
+
+        mRecyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
-            public boolean onQueryTextSubmit(String query) {
-                mQueryText = query;
-                mArticlesAdapter.clear();
-                fetchArticles(0);
-                searchView.clearFocus();
-                return true;
+            public void onScrollStateChanged(@NonNull  RecyclerView recyclerView, int newState) {
+                super.onScrollStateChanged(recyclerView, newState);
+
+                if(!mRecyclerView.canScrollVertically(1)){
+                    //search next page
+                    mArticleListViewModel.searchNextPage();
+                }
+            }
+        });
+
+
+    }
+
+
+    private void initSearchView(){
+
+        mSearchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+            @Override
+            public boolean onQueryTextSubmit(String s) {
+
+                mAdapter.displayLoading();
+                mArticleListViewModel.searchArticlesApi(s,0);
+                mSearchView.clearFocus();
+
+                return false;
             }
 
             @Override
@@ -107,48 +100,38 @@ public class SearchActivity extends AppCompatActivity {
                 return false;
             }
         });
-        return super.onCreateOptionsMenu(menu);
     }
 
     @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        int id = item.getItemId();
+    public void onArticleClick(int position) {
+        Log.d(TAG, "onArticleClick: clicked. " + position);
 
-
-        return super.onOptionsItemSelected(item);
+        Intent intent = new Intent(this, ArticleActivity.class);
+        intent.putExtra("article",mAdapter.getSelectedArticle(position));
+        startActivity(intent);
     }
 
-    private void fetchArticles(int page) {
-        if (Helper.isNetworkAvailable(this)) {
+    @Override
+    public void onCategoryClick(String category) {
 
-            if (!mQueryText.isEmpty()) {
+        mAdapter.displayLoading();
+        mArticleListViewModel.searchArticlesApi(category,0);
+        mSearchView.clearFocus();
 
-                Call<ArticlesResponse> articlesCall = NEW_YORK_TIMES_SERVICE
-                        .getArticles(page, mQueryText);
+    }
 
-                articlesCall.enqueue(new Callback<ArticlesResponse>() {
-                    @Override
-                    public void onResponse(@NonNull Call<ArticlesResponse> call, @NonNull Response<ArticlesResponse> response) {
-                        if (response != null && response.body() != null) {
-                            mArticles.addAll(response.body().getResponse().getArticles());
-                            mArticlesAdapter.notifyDataSetChanged();
-                        } else {
-                            if(response.code() == 429) {
-                                Helper.showSnackBar(mrvArticles, SearchActivity.this, R.string.request_failed_too_many_requests_text);
-                            } else {
-                                Helper.showSnackBar(mrvArticles, SearchActivity.this, R.string.request_failed_text);
-                            }
-                        }
-                    }
-
-                    @Override
-                    public void onFailure(@NonNull Call<ArticlesResponse> call, @NonNull Throwable t) {
-                        Helper.showSnackBar(mrvArticles, SearchActivity.this, R.string.request_failed_text);
-                    }
-                });
-            }
-        } else {
-            Helper.showSnackBarForInternetConnection(mrvArticles, this);
+    private void displaySearchCategories(){
+        Log.d(TAG, "displaySearchCategories: called.");
+        mArticleListViewModel.setIsViewingArticles(false);
+        mAdapter.displaySearchCategories();
+    }
+    @Override
+    public void onBackPressed() {
+        if(mArticleListViewModel.onBackPressed()){
+            super.onBackPressed();
+        }
+        else{
+            displaySearchCategories();
         }
     }
 
